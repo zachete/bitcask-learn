@@ -1,9 +1,18 @@
+use std::collections::HashMap;
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write, stdout};
+use std::io::{BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write, stdout};
 use std::{fs::File, io::stdin};
+
+struct Record {
+    key_len: usize,
+    value_len: usize,
+    key: Vec<u8>,
+    value: Vec<u8>,
+}
 
 struct Bitcask {
     file: File,
+    index: HashMap<Vec<u8>, Vec<u8>>,
     buf_reader: BufReader<File>,
     buf_writer: BufWriter<File>,
 }
@@ -24,39 +33,75 @@ impl Bitcask {
 
         Self {
             file: db_file,
+            index: HashMap::new(),
             buf_writer,
             buf_reader,
         }
     }
 
     pub fn set(&mut self, key: &str, value: &str) {
-        writeln!(self.buf_writer, "{}:{}", key, value).expect("can't write to file");
+        let key_bytes = key.as_bytes();
+        let value_bytes = value.as_bytes();
+        let key_len = key_bytes.len().to_le_bytes();
+        let value_len = value_bytes.len().to_le_bytes();
+        let mut all_bytes = Vec::new();
+        all_bytes.extend_from_slice(&key_len);
+        all_bytes.extend_from_slice(&value_len);
+        all_bytes.extend_from_slice(key_bytes);
+        all_bytes.extend_from_slice(value_bytes);
+
+        self.buf_writer
+            .write_all(&all_bytes)
+            .expect("can't write to db");
         self.buf_writer.flush().expect("can't flush a buf writer");
-        println!("{}:{}", key, value);
     }
 
-    pub fn get(&mut self, key: &str) -> Option<String> {
-        let reader = self.buf_reader.by_ref();
+    pub fn get(&mut self, key: &str) -> Option<&Vec<u8>> {
+        self.index.get(key.as_bytes())
+    }
 
-        for line in reader.lines() {
-            if let Ok(val) = line {
-                let val_clone = val.clone();
-                let parsed_record = val_clone.split(":").collect::<Vec<&str>>();
-                if parsed_record[0] == key {
-                    return Some(parsed_record[1].to_string());
+    pub fn read_record(&mut self) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
+        let mut buf = [0; size_of::<usize>()];
+
+        self.buf_reader.read_exact(&mut buf)?;
+        let key_len = usize::from_le_bytes(buf);
+
+        self.buf_reader.read_exact(&mut buf)?;
+        let value_len = usize::from_le_bytes(buf);
+
+        let mut key = vec![0; key_len];
+        self.buf_reader.read_exact(&mut key)?;
+
+        let mut value = vec![0; value_len];
+        self.buf_reader.read_exact(&mut value)?;
+
+        Ok((key, value))
+    }
+
+    pub fn scan(&mut self) {
+        self.buf_reader.seek(SeekFrom::Start(0));
+
+        'scan: loop {
+            match self.read_record() {
+                Ok((key, value)) => {
+                    println!("key = {:?}, value = {:?}", key, value);
+                    self.index.insert(key, value);
+                }
+                Err(err) => {
+                    if err.kind() == ErrorKind::UnexpectedEof {
+                        break 'scan;
+                    }
                 }
             }
         }
-
-        None
     }
 }
 
 fn main() {
-    let mut bitcask = Bitcask::new("db.txt");
-    let mut prompt = String::new();
+    let mut bitcask = Bitcask::new("db");
 
     loop {
+        let mut prompt = String::new();
         print!("> ");
         stdout().flush().unwrap();
         stdin().read_line(&mut prompt).expect("can't read line");
@@ -67,6 +112,8 @@ fn main() {
             "set" => {
                 let key = parsed_prompt[1];
                 let value = parsed_prompt[2];
+                println!("{}, {}", key, value);
+
                 bitcask.set(key, value);
             }
             "get" => {
@@ -75,12 +122,15 @@ fn main() {
 
                 match value {
                     Some(val) => {
-                        println!("{}", val);
+                        println!("{}", String::from_utf8(val.clone()).unwrap());
                     }
                     None => {
                         println!("Not found")
                     }
                 }
+            }
+            "scan" => {
+                bitcask.scan();
             }
             _ => {}
         }
