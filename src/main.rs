@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::OpenOptions;
-use std::io::{BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write, stdout};
+use std::io::{BufReader, BufWriter, Error, ErrorKind, Read, Seek, SeekFrom, Write, stdout};
 use std::{fs::File, io::stdin};
 
 struct Record {
@@ -10,9 +10,14 @@ struct Record {
     value: Vec<u8>,
 }
 
+#[derive(Debug)]
+struct LogPointer {
+    offset: u64,
+}
+
 struct Bitcask {
     file: File,
-    index: HashMap<Vec<u8>, Vec<u8>>,
+    index: HashMap<Vec<u8>, LogPointer>,
     buf_reader: BufReader<File>,
     buf_writer: BufWriter<File>,
 }
@@ -56,11 +61,11 @@ impl Bitcask {
         self.buf_writer.flush().expect("can't flush a buf writer");
     }
 
-    pub fn get(&mut self, key: &str) -> Option<&Vec<u8>> {
+    pub fn get(&mut self, key: &str) -> Option<&LogPointer> {
         self.index.get(key.as_bytes())
     }
 
-    pub fn read_record(&mut self) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
+    pub fn read_record(&mut self) -> std::io::Result<Record> {
         let mut buf = [0; size_of::<usize>()];
 
         self.buf_reader.read_exact(&mut buf)?;
@@ -75,17 +80,25 @@ impl Bitcask {
         let mut value = vec![0; value_len];
         self.buf_reader.read_exact(&mut value)?;
 
-        Ok((key, value))
+        Ok(Record {
+            key_len,
+            value_len,
+            key,
+            value,
+        })
     }
 
-    pub fn scan(&mut self) {
+    pub fn scan(&mut self) -> std::io::Result<()> {
         self.buf_reader.seek(SeekFrom::Start(0));
 
         'scan: loop {
+            let position = self.buf_reader.stream_position()?;
+
             match self.read_record() {
-                Ok((key, value)) => {
-                    println!("key = {:?}, value = {:?}", key, value);
-                    self.index.insert(key, value);
+                Ok(record) => {
+                    println!("key = {:?}, value = {:?}", record.key, record.value);
+                    self.index
+                        .insert(record.key, LogPointer { offset: position });
                 }
                 Err(err) => {
                     if err.kind() == ErrorKind::UnexpectedEof {
@@ -94,6 +107,8 @@ impl Bitcask {
                 }
             }
         }
+
+        Ok(())
     }
 }
 
@@ -122,7 +137,7 @@ fn main() {
 
                 match value {
                     Some(val) => {
-                        println!("{}", String::from_utf8(val.clone()).unwrap());
+                        println!("{:?}", val);
                     }
                     None => {
                         println!("Not found")
