@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "goliath"
+name = "vola"
 version = "0.1.0"
