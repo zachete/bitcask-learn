@@ -1,4 +1,5 @@
-use crate::record::Record;
+use crate::Record;
+
 use std::{
     fs::File,
     io::{BufReader, ErrorKind, Seek, SeekFrom},

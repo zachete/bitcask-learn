@@ -1,8 +1,6 @@
-mod record;
-mod scanner;
+mod storage;
 
-use record::Record;
-use scanner::Scanner;
+use storage::{Record, Scanner};
 
 use std::collections::HashMap;
 use std::fs::OpenOptions;
